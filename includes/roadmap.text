@@ -1,0 +1,108 @@
+C:\XAMPP\HTDOCS\PTNI4
+│   browse.php
+│   dashboard.php
+│   documents.php
+│   edit.php
+│   index.php
+│   login.php
+│   logout.php
+│   register.php
+│   sql.sql
+│   upload.php
+│   view.php
+│
+├───admin
+│   │   categories.php
+│   │   dashboard.php
+│   │   documents.php
+│   │   settings.php
+│   │   users.php
+│   │
+│   └───ajax
+│           backup_database.php
+│           clear_cache.php
+│           optimize_database.php
+│
+├───superadmin                    ← NEW FOLDER
+│   │   dashboard.php
+│   │   users.php
+│   │   admins.php
+│   │   system_settings.php
+│   │   system_info.php
+│   │   admin_logs.php
+│   │   backup.php
+│   │   maintenance.php
+│   │   security.php
+│   │
+│   └───ajax
+│           system_backup.php
+│           system_restore.php
+│           clear_all_cache.php
+│           system_maintenance.php
+│
+├───api
+│       delete.php
+│       download.php
+│       upload.php
+│
+├───assets
+│   ├───css
+│   │       style.css
+│   │       admin.css
+│   │       superadmin.css      ← NEW
+│   │
+│   ├───images
+│   │   └───icons
+│   └───js
+│           main.js
+│           admin.js
+│           superadmin.js        ← NEW
+│
+├───backups
+├───cache
+├───config
+│       database.php
+│       reset password.php
+│
+├───includes
+│       footer.php
+│       functions.php
+│       header.php
+│       admin_header.php
+│       superadmin_header.php   ← NEW
+│       superadmin_footer.php   ← NEW
+│
+├───temp
+└───uploads
+    │   .htaccess.txt
+    │
+    ├───documents
+    └───thumbnails
+
+
+    tree C:\xampp\htdocs\PTNI4 /f
+
+
+
+
+
+
+
+
+Login visitors
+IT Ticket Request
+
+
+
+
+
+superadmin
+settings
+log
+manage all users
+
+
+
+
+admin
+

@@ -1,0 +1,59 @@
+changes:
+* login.php: the sign up was replace with forgot password
+
+*ALTER TABLE users RENAME TO users_old; then create a new users table without the divisions
+
+*add user both super admin and admin: 
+able to select multiple divisions
+only able to add account with an email ending with @ptni.gov.ph
+
+*admin:
+filter to only what is the logged ins division
+remove division filter
+fixed edit
+
+*superadmin
+added column division in super admin
+
+*able to use email in login
+
+
+added:
+
+files ".php"
+*send_reset.php
+*reset_password
+*update_password
+*forgot_password
+
+database:
+
+CREATE TABLE password_resets (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    email VARCHAR(255) NOT NULL,
+    token VARCHAR(255) NOT NULL,
+    expires_at TIMESTAMP NOT NULL
+);
+
+
+CREATE TABLE user_divisions (
+    user_id INT NOT NULL,
+    division_id INT NOT NULL,
+    PRIMARY KEY (user_id, division_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (division_id) REFERENCES divisions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE users (
+  id` int(11) NOT NULL,
+  username` varchar(50) NOT NULL,
+  email` varchar(100) NOT NULL,
+  password` varchar(255) NOT NULL,
+  full_name` varchar(100) NOT NULL,
+  role` enum('user','admin','superadmin') DEFAULT 'user',
+  status` enum('active','inactive','suspended') DEFAULT 'active',
+  last_login` timestamp NULL DEFAULT NULL COMMENT 'Last login timestamp for the user',
+  avatar` varchar(255) DEFAULT NULL,
+  created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  oupdated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) 
