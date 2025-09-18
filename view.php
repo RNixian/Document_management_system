@@ -12,15 +12,24 @@ if ($doc_id <= 0) {
 try {
     // Get document with related category + uploader info
     $stmt = $db->prepare("
-        SELECT d.*, c.name as category_name, c.color as category_color,
-               u.full_name, u.username
-        FROM documents d
-        LEFT JOIN categories c ON d.category_id = c.id
-        LEFT JOIN users u ON d.user_id = u.id
-        WHERE d.id = ?
-    ");
-    $stmt->execute([$doc_id]);
-    $document = $stmt->fetch(PDO::FETCH_ASSOC);
+    SELECT d.*, c.name as category_name, c.color as category_color,
+           u.full_name, u.username
+    FROM documents d
+    LEFT JOIN categories c ON d.category_id = c.id
+    LEFT JOIN users u ON d.user_id = u.id
+    WHERE d.id = ?
+      AND (
+        d.user_id = ?                       -- owner
+        OR EXISTS (                         -- or shared
+            SELECT 1 FROM shared_documents s 
+            WHERE s.document_id = d.id 
+              AND s.shared_to = ?
+        )
+      )
+");
+$stmt->execute([$doc_id, $_SESSION['user_id'], $_SESSION['user_id']]);
+$document = $stmt->fetch(PDO::FETCH_ASSOC);
+
 
     if (!$document) {
         header('Location: dashboard.php');
@@ -115,9 +124,11 @@ body {
             <a href="edit.php?id=<?= $document['id']; ?>" class="btn btn-warning btn-sm me-2">
                 <i class="bi bi-pencil"></i> Edit
             </a>
+            <!-- 
             <button class="btn btn-primary btn-sm me-2" data-bs-toggle="modal" data-bs-target="#shareModal">
                 <i class="bi bi-share"></i> Share
             </button>
+            -->
             <button class="btn btn-danger btn-sm" onclick="confirmDelete(<?= $document['id']; ?>, '<?= htmlspecialchars($document['title']); ?>')">
                 <i class="bi bi-trash"></i> Delete
             </button>
@@ -139,8 +150,8 @@ body {
                     <p><strong>Description:</strong></p>
                     <p><?= nl2br(htmlspecialchars($document['description'])); ?></p>
                     <p><strong>File:</strong>
-                        <a href="uploads/<?= htmlspecialchars($document['file_name']); ?>" target="_blank" class="fw-semibold text-decoration-none">
-                            <i class="bi bi-link-45deg me-1"></i><?= htmlspecialchars($document['file_name']); ?>
+                        <a href="uploads/<?= htmlspecialchars($document['filename']); ?>" target="_blank" class="fw-semibold text-decoration-none">
+                            <i class="bi bi-link-45deg me-1"></i><?= htmlspecialchars($document['filename']); ?>
                         </a>
                     </p>
                 </div>
@@ -159,7 +170,7 @@ body {
     </div>
 
     <!-- Share Modal -->
-    <div class="modal fade" id="shareModal" tabindex="-1">
+    <!-- <div class="modal fade" id="shareModal" tabindex="-1">
         <div class="modal-dialog modal-lg">
             <div class="modal-content">
                 <form id="shareForm">
@@ -191,7 +202,7 @@ body {
             </div>
         </div>
     </div>
-
+                            -->
     <!-- Delete Modal -->
     <div class="modal fade" id="deleteModal" tabindex="-1">
         <div class="modal-dialog">
@@ -250,6 +261,7 @@ document.getElementById('confirmDeleteBtn').addEventListener('click', function()
 });
 
 // Share logic
+<!-- 
 document.getElementById('shareForm').addEventListener('submit', function(e) {
     e.preventDefault();
     const formData = new FormData(this);
@@ -271,7 +283,7 @@ document.getElementById('shareForm').addEventListener('submit', function(e) {
         showAlert('Error sharing document. Please try again.', 'danger');
     });
 });
-
+-->
 // Reusable alert
 function showAlert(message, type) {
     const alertBox = document.createElement('div');

@@ -228,7 +228,6 @@ require_once 'includes/header.php';
     <div class="glass-card mb-4">
         <h2>👋 Welcome, <?php echo htmlspecialchars($_SESSION['full_name'] ?? $_SESSION['username']); ?></h2>
         <p>Manage your documents efficiently with <b>PTNI4</b>. Upload, organize, and share your files with ease.</p>
-        <a href="upload.php" class="btn-primary"><i class="fas fa-cloud-upload-alt me-2"></i> Upload New Document</a>
     </div>
 
     <!-- Stats -->

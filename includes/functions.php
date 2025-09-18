@@ -319,8 +319,11 @@ function getLastLogin($user_id) {
 
 function loginUser($usernameOrEmail, $password) {
     global $db;
-    session_start();
-    
+
+    if (session_status() === PHP_SESSION_NONE) {
+        session_start();
+    }
+
     try {
         if (filter_var($usernameOrEmail, FILTER_VALIDATE_EMAIL)) {
             if (!str_ends_with(strtolower($usernameOrEmail), '@ptni4.com')) {
@@ -332,24 +335,29 @@ function loginUser($usernameOrEmail, $password) {
         }
 
         $stmt->execute([$usernameOrEmail]);
-        $user = $stmt->fetch();
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);  // ✅ enforce assoc
 
         if ($user && password_verify($password, $user['password'])) {
             $newSession = bin2hex(random_bytes(16));
-            $currentIp = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+            $currentIp  = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
 
-            // If another session exists, notify via email
-            if (!empty($user['last_session_id'])) {
+            // If another session exists and is different, notify
+            if (!empty($user['last_session_id']) && $user['last_session_id'] !== $newSession) {
                 sendMultipleLoginAlert($user['email'], $user['username'], $currentIp);
             }
 
             // Store session info
-            $_SESSION['user_id'] = $user['id'];
-            $_SESSION['username'] = $user['username'];
-            $_SESSION['role'] = $user['role'];
+            $_SESSION['user_id']   = $user['id'];
+            $_SESSION['username']  = $user['username'];
+            $_SESSION['role']      = $user['role'];
             $_SESSION['full_name'] = $user['full_name'];
+            $_SESSION['session_id'] = $newSession; // ✅ track in session too
 
-            $stmt = $db->prepare("UPDATE users SET last_login = NOW(), last_session_id = ?, last_login_ip = ? WHERE id = ?");
+            $stmt = $db->prepare("
+                UPDATE users 
+                SET last_login = NOW(), last_session_id = ?, last_login_ip = ? 
+                WHERE id = ?
+            ");
             $stmt->execute([$newSession, $currentIp, $user['id']]);
 
             if (in_array($user['role'], ['admin', 'superadmin'])) {
@@ -362,9 +370,12 @@ function loginUser($usernameOrEmail, $password) {
         return false;
 
     } catch (PDOException $e) {
+        // Better: log the error
+        error_log("Login error: " . $e->getMessage());
         return false;
     }
 }
+
 
 function sendMultipleLoginAlert($email, $username, $newIp) {
     $mail = new PHPMailer(true);

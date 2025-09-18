@@ -1,6 +1,7 @@
 <?php
 // In Development Page
-?><!DOCTYPE html>
+?>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     

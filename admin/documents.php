@@ -4,111 +4,229 @@ require_once '../includes/functions.php';
 requireLogin();
 requireAdmin();
 
-// Get logged-in admin's division_id from user_divisions table
-$currentDivisionId = null;
-try {
-    $stmt = $db->prepare("
-        SELECT division_id 
-        FROM user_divisions 
-        WHERE user_id = ?
-    ");
-    $stmt->execute([$_SESSION['user_id']]);
-    $currentDivisionId = $stmt->fetchColumn();
-} catch (PDOException $e) {
-    $currentDivisionId = null;
+$user_id    = $_SESSION['user_id'] ?? null;
+$username   = $_SESSION['username'] ?? 'guest';
+
+// ================== Folder Creation ==================
+if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST['folder_name'])) {
+    $folderName  = trim($_POST['folder_name']);
+    $division_id = $_POST['division_id'] ?? null;
+
+    if ($folderName !== '') {
+        try {
+            if (empty($division_id)) {
+                $stmtDiv = $db->prepare("SELECT division_id FROM user_divisions WHERE user_id = ? LIMIT 1");
+                $stmtDiv->execute([$user_id]);
+                $division = $stmtDiv->fetch(PDO::FETCH_ASSOC);
+                $division_id = $division ? $division['division_id'] : null;
+            }
+
+            $stmt = $db->prepare("
+                INSERT INTO folders (folder_name, created_by, division_id)
+                VALUES (:folder_name, :username, :division_id)
+            ");
+            $stmt->execute([
+                ':folder_name' => $folderName,
+                ':username'    => $username,
+                ':division_id' => $division_id
+            ]);
+
+            header("Location: documents.php?success=1");
+            exit;
+        } catch (PDOException $e) {
+            echo "Error creating folder: " . htmlspecialchars($e->getMessage());
+        }
+    } else {
+        echo "Folder name cannot be empty.";
+    }
 }
 
-// Get categories for dropdown
+// ================== Edit Document Visibility ==================
+if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST['doc_id'], $_POST['visibility'])) {
+    header('Content-Type: application/json');
+
+    $doc_id = intval($_POST['doc_id']);
+    $visibility = intval($_POST['visibility']);
+
+    if ($doc_id <= 0) {
+        echo json_encode(["success" => false, "message" => "Invalid document ID"]);
+        exit;
+    }
+
+    if ($visibility !== 0 && $visibility !== 1) {
+        $visibility = 0;
+    }
+
+    try {
+        $stmt = $db->prepare("UPDATE documents SET is_public = ? WHERE id = ?");
+        $stmt->execute([$visibility, $doc_id]);
+
+        echo json_encode(["success" => true, "message" => "Visibility updated successfully"]);
+        exit;
+    } catch (PDOException $e) {
+        echo json_encode(["success" => false, "message" => $e->getMessage()]);
+        exit;
+    }
+}
+
+// ================== Document → Folder Assignment ==================
+if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST['document_id'], $_POST['folder_id'])) {
+    $documentId = $_POST['document_id'];
+    $folderId   = $_POST['folder_id'];
+
+    try {
+        $stmt = $db->prepare("UPDATE documents SET folder_id = :folder_id WHERE id = :document_id");
+        $stmt->execute([
+            ':folder_id'   => $folderId,
+            ':document_id' => $documentId
+        ]);
+
+        header('Content-Type: application/json');
+        echo json_encode(['success' => true]);
+        exit;
+    } catch (PDOException $e) {
+        header('Content-Type: application/json');
+        echo json_encode(['success' => false, 'message' => htmlspecialchars($e->getMessage())]);
+        exit;
+    }
+}
+
+// ================== Categories ==================
 try {
-    $stmt = $db->query("SELECT * FROM categories ORDER BY name");
-    $categories = $stmt->fetchAll();
+    $stmt       = $db->query("SELECT * FROM categories ORDER BY name");
+    $categories = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
     $categories = [];
 }
 
-// Get filter parameters
-$search = isset($_GET['search']) ? sanitize($_GET['search']) : '';
-$user_filter = isset($_GET['user']) ? (int)$_GET['user'] : 0;
-$type_filter = isset($_GET['type']) ? sanitize($_GET['type']) : '';
-$status_filter = isset($_GET['status']) ? sanitize($_GET['status']) : '';
+// ================== Logged-in admin's Divisions ==================
+$userDivisions   = [];
+$userDivisionIds = [];
 
-// Build query conditions
-$where_conditions = [];
+try {
+    $stmt = $db->prepare("
+        SELECT d.id, d.name
+        FROM user_divisions ud
+        JOIN division d ON ud.division_id = d.id
+        WHERE ud.user_id = ?
+    ");
+    $stmt->execute([$user_id]);
+    $userDivisions   = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $userDivisionIds = array_column($userDivisions, 'id'); 
+} catch (PDOException $e) {
+    $userDivisions   = [];
+    $userDivisionIds = [];
+}
+
+// ================== Filters ==================
+$search        = trim($_GET['search'] ?? '');
+$user_filter   = $_GET['user']   ?? '';
+$type_filter   = $_GET['type']   ?? '';
+$status_filter = $_GET['status'] ?? '';
+$folder_filter = $_GET['folder_id'] ?? '';
+
+// ================== WHERE Builder ==================
+$where  = [];
 $params = [];
 
-// Division restriction (always applied)
-if ($currentDivisionId !== null) {
-    $where_conditions[] = "ud.division_id = ?";
-    $params[] = $currentDivisionId;
+if (!empty($userDivisionIds)) {
+    $placeholders = implode(',', array_fill(0, count($userDivisionIds), '?'));
+
+    $where[] = "(
+        (ud.division_id IN ($placeholders) AND d.is_public = 1)
+        OR d.user_id = ?
+    )";
+    $params   = array_merge($params, $userDivisionIds);
+    $params[] = $user_id;
 }
 
-if (!empty($search)) {
-    $where_conditions[] = "(d.title LIKE ? OR d.description LIKE ? OR d.original_name LIKE ?)";
-    $search_param = "%$search%";
-    $params[] = $search_param;
-    $params[] = $search_param;
-    $params[] = $search_param;
+if ($search !== '') {
+    $where[]  = "d.title LIKE ?";
+    $params[] = "%$search%";
 }
-
-if ($user_filter > 0) {
-    $where_conditions[] = "d.user_id = ?";
+if ($user_filter !== '') {
+    $where[]  = "d.user_id = ?";
     $params[] = $user_filter;
 }
-
-if (!empty($type_filter)) {
-    $where_conditions[] = "d.file_type = ?";
+if ($type_filter !== '') {
+    $where[]  = "d.file_type = ?";
     $params[] = $type_filter;
 }
-
-if (!empty($status_filter)) {
-    if ($status_filter === 'public') {
-        $where_conditions[] = "d.is_public = 1";
-    } elseif ($status_filter === 'private') {
-        $where_conditions[] = "d.is_public = 0";
-    }
+if ($status_filter !== '') {
+    $where[]  = "d.is_public = ?";
+    $params[] = ($status_filter === 'public') ? 1 : 0;
+}
+if ($folder_filter !== '') {
+    $where[]  = "d.folder_id = ?";
+    $params[] = $folder_filter;
+} elseif (empty($search) && empty($user_filter) && empty($type_filter) && empty($status_filter)) {
+    $where[] = "d.folder_id IS NULL";
 }
 
-$where_clause = !empty($where_conditions) ? 'WHERE ' . implode(' AND ', $where_conditions) : '';
+$where_sql = $where ? "WHERE " . implode(" AND ", $where) : "";
 
-// Get all documents with user + division info
+// ================== Documents ==================
+$sql = "
+    SELECT DISTINCT d.*, u.username, u.full_name, c.name AS category_name
+    FROM documents d
+    JOIN users u ON d.user_id = u.id
+    JOIN user_divisions ud ON u.id = ud.user_id
+    LEFT JOIN categories c ON d.category_id = c.id
+    $where_sql
+    ORDER BY d.created_at DESC
+";
+$stmt = $db->prepare($sql);
+$stmt->execute($params);
+$documents = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// ================== Shared With Me ==================
+$sharedDocuments = [];
 try {
-    $sql = "
-        SELECT d.*, u.username, u.full_name, c.name as category_name
-        FROM documents d
-        JOIN users u ON d.user_id = u.id
-        JOIN user_divisions ud ON u.id = ud.user_id
-        LEFT JOIN categories c ON d.category_id = c.id
-        $where_clause
-        ORDER BY d.created_at DESC
-    ";
-    $stmt = $db->prepare($sql);
-    $stmt->execute($params);
-    $documents = $stmt->fetchAll();
-    
-    // Get users for filter dropdown (only from same division)
     $stmt = $db->prepare("
-        SELECT u.id, u.username, u.full_name
-        FROM users u
-        JOIN user_divisions ud ON u.id = ud.user_id
-        WHERE ud.division_id = ?
-        ORDER BY u.username
+        SELECT d.*, u.username, u.full_name, c.name AS category_name
+        FROM shared_documents s
+        JOIN documents d ON s.document_id = d.id
+        JOIN users u ON d.user_id = u.id
+        LEFT JOIN categories c ON d.category_id = c.id
+        WHERE s.shared_to = ?
+        ORDER BY s.shared_at DESC
     ");
-    $stmt->execute([$currentDivisionId]);
-    $users = $stmt->fetchAll();
-    
-    // Get file types for filter
-    $stmt = $db->query("SELECT DISTINCT file_type FROM documents ORDER BY file_type");
-    $file_types = $stmt->fetchAll();
-    
+    $stmt->execute([$user_id]);
+    $sharedDocuments = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
-    $documents = [];
-    $users = [];
-    $file_types = [];
-    $error = "Error loading documents: " . $e->getMessage();
+    $sharedDocuments = [];
 }
+
+// ================== Folders ==================
+$whereFolder  = [];
+$paramsFolder = [];
+
+if (!empty($userDivisionIds)) {
+    $placeholders = implode(',', array_fill(0, count($userDivisionIds), '?'));
+    $whereFolder[] = "f.division_id IN ($placeholders)";
+    $paramsFolder  = array_merge($paramsFolder, $userDivisionIds);
+}
+
+$whereSQL = $whereFolder ? "WHERE " . implode(" AND ", $whereFolder) : "";
+
+$stmt = $db->prepare("
+    SELECT f.id, f.folder_name, f.created_by, f.created_at,
+           f.division_id, d.name AS division_name
+    FROM folders f
+    LEFT JOIN division d ON f.division_id = d.id
+    $whereSQL
+    ORDER BY f.created_at DESC
+");
+$stmt->execute($paramsFolder);
+$folders = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// ================== File Types Dropdown ==================
+$file_types = $db->query("SELECT DISTINCT file_type FROM documents ORDER BY file_type")->fetchAll(PDO::FETCH_ASSOC);
 
 require_once '../includes/admin_header.php';
 ?>
+
+
 <div class="container-fluid px-4">
     <!-- Page Header -->
     <div class="row mb-4">
@@ -128,9 +246,10 @@ require_once '../includes/admin_header.php';
                             <button class="btn btn-light btn-lg me-2" data-bs-toggle="modal" data-bs-target="#uploadModal">
                                 <i class="fas fa-plus me-2"></i>Upload Document
                             </button>
-                            <a href="dashboard.php" class="btn btn-outline-light">
-                                <i class="fas fa-arrow-left me-2"></i>Dashboard
-                            </a>
+
+                            <button class="btn btn-light btn-lg me-2" data-bs-toggle="modal" data-bs-target="#openFolderModal">
+    <i class="fas fa-plus me-2"></i> New Folder
+</button>
                         </div>
                     </div>
                 </div>
@@ -152,194 +271,254 @@ require_once '../includes/admin_header.php';
                     </h5>
                 </div>
                 <div class="card-body">
-                    <form method="GET" action="" class="row g-3">
-                        <!-- Search -->
-                        <div class="col-md-3">
-                            <label for="search" class="form-label">Search</label>
-                            <input type="text" class="form-control" id="search" name="search" 
-                                   placeholder="Title, description, filename..." 
-                                   value="<?php echo htmlspecialchars($search); ?>">
-                        </div>
-                        
-                        <!-- User Filter -->
-                        <div class="col-md-3">
-                            <label for="user" class="form-label">User</label>
-                            <select class="form-select" id="user" name="user">
-                                <option value="">All Users</option>
-                                <?php foreach ($users as $user): ?>
-                                    <option value="<?php echo $user['id']; ?>" 
-                                            <?php echo $user_filter == $user['id'] ? 'selected' : ''; ?>>
-                                        <?php echo htmlspecialchars($user['full_name'] ?? $user['username']); ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                        
-                        <!-- File Type Filter -->
-                        <div class="col-md-2">
-                            <label for="type" class="form-label">File Type</label>
-                            <select class="form-select" id="type" name="type">
-                                <option value="">All Types</option>
-                                <?php foreach ($file_types as $type): ?>
-                                    <option value="<?php echo $type['file_type']; ?>" 
-                                            <?php echo $type_filter === $type['file_type'] ? 'selected' : ''; ?>>
-                                        <?php echo strtoupper($type['file_type']); ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                        
-                        <!-- Status Filter -->
-                        <div class="col-md-2">
-                            <label for="status" class="form-label">Status</label>
-                            <select class="form-select" id="status" name="status">
-                                <option value="">All Status</option>
-                                <option value="public" <?php echo $status_filter === 'public' ? 'selected' : ''; ?>>Public</option>
-                                <option value="private" <?php echo $status_filter === 'private' ? 'selected' : ''; ?>>Private</option>
-                            </select>
-                        </div>
-                        
-                        <!-- Filter Button -->
-                        <div class="col-md-2">
-                            <label class="form-label">&nbsp;</label>
-                            <div class="d-grid">
-                                <button type="submit" class="btn btn-primary">
-                                    <i class="fas fa-search me-1"></i>Filter
-                                </button>
-                            </div>
-                        </div>
-                    </form>
+                <form id="filterForm" class="row g-3 mb-4" method="GET" action="">
+  <!-- Search -->
+  <div class="col-md-3">
+    <label for="search" class="form-label">Search</label>
+    <input 
+        type="text" 
+        class="form-control" 
+        id="search" 
+        name="search"
+        value="<?= htmlspecialchars($search ?? '') ?>" 
+        placeholder="Title contains...">
+  </div>
+
+  <!-- User -->
+  <div class="col-md-3">
+    <label for="user" class="form-label">User</label>
+    <select class="form-select" id="user" name="user">
+        <option value="">All Users</option>
+        <?php foreach ($users as $u): ?>
+            <option 
+                value="<?= htmlspecialchars($u['id']) ?>" 
+                <?= ($user_filter == $u['id']) ? 'selected' : '' ?>>
+                <?= htmlspecialchars($u['full_name'] ?: $u['username']) ?>
+            </option>
+        <?php endforeach; ?>
+    </select>
+  </div>
+
+  <!-- File Type -->
+  <div class="col-md-2">
+    <label for="type" class="form-label">File Type</label>
+    <select class="form-select" id="type" name="type">
+        <option value="">All Types</option>
+        <?php foreach ($file_types as $ft): ?>
+            <option 
+                value="<?= $ft['file_type'] ?>" 
+                <?= ($type_filter === $ft['file_type']) ? 'selected' : '' ?>>
+                <?= strtoupper($ft['file_type']) ?>
+            </option>
+        <?php endforeach; ?>
+    </select>
+  </div>
+
+  <!-- Status -->
+  <div class="col-md-2">
+    <label for="status" class="form-label">Status</label>
+    <select class="form-select" id="status" name="status">
+        <option value="">All Status</option>
+        <option value="public" <?= ($status_filter === 'public') ? 'selected' : '' ?>>Public</option>
+        <option value="private" <?= ($status_filter === 'private') ? 'selected' : '' ?>>Private</option>
+    </select>
+  </div>
+
+  <!-- Actions -->
+  <div class="col-md-2 d-grid">
+    <label class="form-label">&nbsp;</label>
+    <button type="submit" class="btn btn-primary">
+        <i class="fas fa-search me-1"></i>Filter
+    </button>
+    <a href="documents.php" class="btn btn-secondary mt-1">
+        <i class="fas fa-trash me-1"></i>Clear
+    </a>
+  </div>
+</form>
+
+
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Documents Table -->
-    <div class="card shadow">
-        <div class="card-header py-3">
-            <div class="d-flex justify-content-between align-items-center">
-                <h6 class="m-0 font-weight-bold text-">
-                    All Documents (<?php echo count($documents); ?> total)
-                </h6>
-                <?php if (!empty($search) || $user_filter > 0 || !empty($type_filter) || !empty($status_filter)): ?>
-                    <a href="documents.php" class="btn btn-outline-secondary btn-sm">
-                        <i class="fas fa-times me-1"></i>Clear Filters
-                    </a>
-                <?php endif; ?>
-            </div>
-        </div>
-        <div class="card-body">
-            <?php if (empty($documents)): ?>
-                <div class="text-center py-4">
-                    <i class="fas fa-folder-open fa-3x text-muted mb-3"></i>
-                    <h5>No documents found</h5>
-                    <p class="text-muted">
-                        <?php if (!empty($search) || $user_filter > 0 || !empty($type_filter) || !empty($status_filter)): ?>
-                            Try adjusting your search criteria or filters.
-                        <?php else: ?>
-                            No documents have been uploaded yet.
-                        <?php endif; ?>
-                    </p>
-                </div>
-            <?php else: ?>
-                <div class="table-responsive">
-                    <table class="table table-bordered table-hover" width="100%" cellspacing="0">
-                        <thead class="table-dark">
-                            <tr>
-                                <th>Document</th>
-                                <th>Owner</th>
-                                <th>Category</th>
-                                <th>Size</th>
-                                <th>Uploaded</th>
-                                <th>Downloads</th>
-                                <th>Status</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($documents as $doc): ?>
-                            <tr>
-                                <td>
-                                    <div class="d-flex align-items-center">
-                                        <i class="<?php echo getFileIcon($doc['file_type'] ?? 'unknown'); ?> me-2"></i>
-                                        <div>
-                                            <div class="fw-bold"><?php echo htmlspecialchars($doc['title']); ?></div>
-                                            <small class="text-muted"><?php echo htmlspecialchars($doc['original_name']); ?></small>
-                                        </div>
-                                    </div>
-                                </td>
-                                <td>
-                                    <div>
-                                        <strong><?php echo htmlspecialchars($doc['full_name'] ?? $doc['username']); ?></strong>
-                                        <br><small class="text-muted">@<?php echo htmlspecialchars($doc['username']); ?></small>
-                                    </div>
-                                </td>
-                                <td>
-                                    <?php if ($doc['category_name']): ?>
-                                        <span class="badge bg-info"><?php echo htmlspecialchars($doc['category_name']); ?></span>
-                                    <?php else: ?>
-                                        <span class="text-muted">Uncategorized</span>
-                                    <?php endif; ?>
-                                </td>
-                                <td><?php echo formatFileSize($doc['file_size']); ?></td>
-                                <td>
-                                    <small>
-                                        <?php echo date('M j, Y', strtotime($doc['created_at'])); ?><br>
-                                        <?php echo date('g:i A', strtotime($doc['created_at'])); ?>
-                                    </small>
-                                </td>
-                                <td>
-                                    <span class="badge bg-success">
-                                        <i class="fas fa-download me-1"></i>
-                                        <?php echo number_format($doc['downloads'] ?? 0); ?>
-                                    </span>
-                                </td>
-                                <td>
-                                    <?php if ($doc['is_public']): ?>
-                                        <span class="badge bg-success">
-                                            <i class="fas fa-globe me-1"></i>Public
-                                        </span>
-                                    <?php else: ?>
-                                        <span class="badge bg-secondary">
-                                            <i class="fas fa-lock me-1"></i>Private
-                                        </span>
-                                    <?php endif; ?>
-                                </td>
-<td>
-    <div class="btn-group" role="group">
-        <a href="../api/download.php?id=<?php echo $doc['id']; ?>"
-           class="btn btn-sm btn-outline-success" title="Download">
-            <i class="fas fa-download"></i>
-        </a>
-        <button type="button" class="btn btn-sm btn-outline-primary"
-                onclick="previewDocument(<?php echo $doc['id']; ?>, '<?php echo addslashes($doc['original_name']); ?>', '<?php echo $doc['file_type']; ?>')"
-                title="Preview">
-            <i class="fas fa-eye"></i>
-        </button>
-        <button type="button" class="btn btn-sm btn-outline-warning"
-                onclick="editCategory(<?php echo $doc['id']; ?>, <?php echo $doc['category_id'] ?: 'null'; ?>)"
+<!-- Breadcrumb Back -->
+<div id="breadcrumbContainer" class="mb-3" style="display:none;">
+  <a href="javascript:void(0)" id="backToFolders" class="btn btn-outline-secondary btn-sm">
+    <i class="fas fa-arrow-left"></i> <span id="breadcrumbText">Back to Folders</span>
+  </a>
+</div>
+
+ <?php 
+$filtersActive = !empty($search) || !empty($user_filter) || !empty($type_filter) || !empty($status_filter);
+?>
+<!-- ================== Shared With Me ================== -->
+<?php if (!empty($sharedDocuments)): ?>
+<div class="mb-4">
+    <h4 class="mb-3">Shared With Me</h4>
+    <div class="row g-2" id="sharedDocumentsContainer">
+        <?php foreach ($sharedDocuments as $document): ?>
+            <div class="col-sm-6 col-md-4 col-lg-3" data-document-id="<?= $document['id'] ?>">
+                <div class="card shadow-sm h-100">
+                    <div class="card-body d-flex flex-column">
+                        <h6 class="fw-bold text-truncate"><?= htmlspecialchars($document['title']) ?></h6>
+                        <small class="text-muted text-truncate"><?= htmlspecialchars($document['original_name']) ?></small>
+                        <strong><?= htmlspecialchars($document['full_name'] ?? $document['username']) ?></strong>
+                        <small>
+                            <?= $document['category_name']
+                                ? '<span class="badge bg-info">'.htmlspecialchars($document['category_name']).'</span>'
+                                : '<span class="text-muted">Uncategorized</span>'; ?>
+                        </small>
+
+                        <div class="mt-auto btn-group btn-group-sm">
+                        <a href="../api/download.php?id=<?= $document['id'] ?>" class="btn btn-outline-success" title="Download">
+                    <i class="fas fa-download"></i>
+                </a>
+                <button type="button" class="btn btn-outline-primary"
+                    onclick="previewDocument(<?= $document['id'] ?>, '<?= addslashes($document['original_name']) ?>', '<?= $document['file_type'] ?>')"
+                    title="Preview">
+                    <i class="fas fa-eye"></i>
+                </button>
+                <button type="button" class="btn btn-outline-warning"
+                onclick="editCategory(<?= $document['id'] ?>, <?= $document['category_id'] ?: 'null' ?>)"
                 title="Edit Category">
-            <i class="fas fa-tag"></i>
-        </button>
-        <button type="button" class="btn btn-sm btn-outline-danger"
-                onclick="deleteDocument(<?php echo $doc['id']; ?>, '<?php echo addslashes($doc['title']); ?>')"
-                title="Delete">
-            <i class="fas fa-trash"></i>
-        </button>
-    </div>
-</td>
+                <i class="fas fa-tag"></i>
+              </button>
+    
+<button type="button"
+    class="btn btn-sm btn-outline-primary"
+    onclick="window.location.href='view.php?id=<?= $document['id'] ?>'"
+    title="View Document">
+    <i class="fas fa-folder-open"></i>
+</button>
 
-                            </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
+                        </div>
+                    </div>
                 </div>
-            <?php endif; ?>
+            </div>
+        <?php endforeach; ?>
+    </div>
+</div>
+<?php else: ?>
+    <div class="mb-4 text-center text-muted">
+        <p>No documents have been shared with you.</p>
+    </div>
+<?php endif; ?>
+
+
+<!-- ================== Folders ================== -->
+<?php if (empty($folder_filter) && !$filtersActive): ?>
+    <div id="foldersContainer" class="row g-3 mb-4">
+        <?php foreach ($folders as $folder): ?>
+            <div class="col-sm-6 col-md-4 col-lg-3">
+                <a href="javascript:void(0)" class="text-decoration-none text-dark folder-item"
+                   data-folder-id="<?= $folder['id'] ?>">
+                  <div class="card folder-card text-center h-100">
+                    <div class="card-body d-flex flex-column align-items-center justify-content-center">
+                      <div class="folder-icon mb-2"
+                           style="background-image:url('https://cdn-icons-png.flaticon.com/512/716/716784.png');
+                                  width:60px; height:60px; background-size:cover;">
+                      </div>
+                      <h6 class="fw-bold text-truncate">
+                      <h5 class="card-title"><?= htmlspecialchars($folder['folder_name']) ?></h5>
+        <p class="text-muted mb-1">Created by: <?= htmlspecialchars($folder['created_by']) ?></p>
+        <p class="text-muted mb-0">Division: <?= htmlspecialchars($folder['division_name'] ?? 'Unassigned') ?></p>
+                      </h6>
+                      <small class="text-muted">
+                        Created: <?= date('M j, Y', strtotime($folder['created_at'])) ?>
+                      </small>
+                    </div>
+                  </div>
+                </a>
+            </div>
+        <?php endforeach; ?>
+    </div>
+<?php endif; ?>
+
+
+<!-- ================== Documents ================== -->
+<div id="documentsContainer" style="display:block; padding-top:20px;">
+  <a href="javascript:void(0)" id="backToFolders"
+     class="btn btn-outline-secondary btn-sm mb-3" style="display:none;">
+    <i class="fas fa-arrow-left"></i> Back to Folders
+  </a>
+
+  <div id="documentsContent" class="row g-2">
+    <?php foreach ($documents as $document): ?>
+        <div class="col-sm-6 col-md-4 col-lg-3" data-document-id="<?= $document['id'] ?>">
+    <div class="card shadow-sm h-100">
+        <div class="card-body d-flex flex-column">
+            <h6 class="fw-bold text-truncate"><?= htmlspecialchars($document['title']) ?></h6>
+            <small class="text-muted text-truncate"><?= htmlspecialchars($document['original_name']) ?></small>
+            <small><strong><?= htmlspecialchars($document['full_name'] ?? $document['username']) ?></strong></small>
+            <small>
+                <?= $document['category_name']
+                    ? '<span class="badge bg-info">'.htmlspecialchars($document['category_name']).'</span>'
+                    : '<span class="text-muted">Uncategorized</span>'; ?>
+            </small>
+            <div class="mt-auto btn-group btn-group-sm">
+                <a href="../api/download.php?id=<?= $document['id'] ?>" class="btn btn-outline-success" title="Download">
+                    <i class="fas fa-download"></i>
+                </a>
+                <button type="button" class="btn btn-outline-primary"
+                    onclick="previewDocument(<?= $document['id'] ?>, '<?= addslashes($document['original_name']) ?>', '<?= $document['file_type'] ?>')"
+                    title="Preview">
+                    <i class="fas fa-eye"></i>
+                </button>
+                <button type="button" class="btn btn-outline-warning"
+                onclick="editCategory(<?= $document['id'] ?>, <?= $document['category_id'] ?: 'null' ?>)"
+                title="Edit Category">
+                <i class="fas fa-tag"></i>
+              </button>
+              <button type="button" class="btn btn-outline-warning"
+                onclick="openAssignFolderModal(<?= $document['id'] ?>, '<?= addslashes($document['title']) ?>')"
+                title="Assign Folder">
+                <i class="fas fa-folder-plus"></i>
+            </button>
+
+                <button type="button" class="btn btn-outline-danger"
+                    onclick="deleteDocument(<?= $document['id'] ?>, '<?= addslashes($document['title']) ?>')"
+                    title="Delete">
+                    <i class="fas fa-trash"></i>
+                </button>
+                <button type="button"
+        class="btn btn-sm btn-outline-warning edit-visibility-btn"
+        data-id="<?= intval($document['id']) ?>" 
+        data-visibility="<?= intval($document['is_public']) ?>"
+        title="Edit Visibility">
+    <i class="fas <?= $document['is_public'] ? 'fa-eye' : 'fa-eye-slash' ?>"></i>
+</button>
+
+<button type="button"
+    class="btn btn-sm btn-outline-primary"
+    onclick="window.location.href='view.php?id=<?= $document['id'] ?>'"
+    title="View Document">
+    <i class="fas fa-folder-open"></i>
+</button>
+
+<button type="button"
+    class="btn btn-sm btn-outline-primary"
+    onclick="window.location.href='document_access.php?id=<?= $document['id'] ?>'"
+    title="Access Point">
+    <i class="fas fa-person"></i>
+</button>
+
+            </div>
         </div>
     </div>
 </div>
 
+    <?php endforeach; ?>
 
+    <?php if (empty($documents)): ?>
+      <div class="col-12 text-center text-muted py-5">No unassigned documents found.</div>
+    <?php endif; ?>
+  </div>
+</div>
+
+<!-- Modal
+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
+-->
 <!-- Preview Document Modal -->
 <div class="modal fade" id="previewModal" tabindex="-1">
     <div class="modal-dialog modal-xl">
@@ -369,6 +548,7 @@ require_once '../includes/admin_header.php';
                     </button>
                 </div>
             </div>
+
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
                 <button type="button" class="btn btn-primary" id="downloadFromPreviewBtn">
@@ -429,7 +609,7 @@ require_once '../includes/admin_header.php';
                 <form id="uploadForm" enctype="multipart/form-data">
                     <!-- File Upload Area -->
                     <div class="upload-area" id="uploadArea" style="border: 2px dashed #ddd; padding: 40px; text-align: center; border-radius: 8px; cursor: pointer; transition: all 0.3s ease;">
-                        <div class="text-center">
+                    <div class="text-center">
                             <i class="fas fa-cloud-upload-alt" style="font-size: 3rem; color: #6b7280; margin-bottom: 1rem;"></i>
                             <h5>Drag & Drop Files Here</h5>
                             <p class="text-muted mb-3">or click to browse files</p>
@@ -459,7 +639,7 @@ require_once '../includes/admin_header.php';
                         <h6><i class="fas fa-list me-2"></i>Selected Files</h6>
                         <div id="fileList"></div>
                     </div>
-                    
+
                     <!-- Document Details -->
                     <div class="row mt-4">
                         <div class="col-md-6">
@@ -496,6 +676,18 @@ require_once '../includes/admin_header.php';
                                   placeholder="Add a description for your documents..."></textarea>
                     </div>
                     
+                    <div class="mt-3">
+                        <label for="folder_id" class="form-label">Folder to Put</label>
+                        <select name="folder_id" id="folder_id" class="form-control" required>
+                            <option value="">-- Select Folder --</option>
+                            <?php foreach ($folders as $folder): ?>
+                                <option value="<?php echo $folder['id']; ?>">
+                                    <?php echo htmlspecialchars($folder['folder_name']); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+
                     <!-- Upload Progress -->
                     <div class="upload-progress mt-4" style="display: none;">
                         <div class="d-flex justify-content-between align-items-center mb-2">
@@ -521,7 +713,125 @@ require_once '../includes/admin_header.php';
     </div>
 </div>
 
+<!-- Create Folder Modal -->
+<div class="modal fade" id="openFolderModal" tabindex="-1" aria-labelledby="folderModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      
+      <!-- Header -->
+      <div class="modal-header">
+        <h5 class="modal-title" id="folderModalLabel">Create New Folder</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+
+      <!-- Body -->
+      <div class="modal-body">
+      <form method="POST" action="documents.php" class="row g-3">
+  <div class="col-md-6">
+    <label for="folder_name" class="form-label">Folder Name</label>
+    <input type="text" name="folder_name" id="folder_name" class="form-control" required>
+  </div>
+
+  <?php if (count($userDivisions) > 1): ?>
+  <div class="col-md-6">
+    <label for="division_id" class="form-label">Division</label>
+    <select name="division_id" id="division_id" class="form-select" required>
+      <option value="">-- Select Division --</option>
+      <?php foreach ($userDivisions as $division): ?>
+        <option value="<?= htmlspecialchars($division['id']) ?>">
+          <?= htmlspecialchars($division['name']) ?>
+        </option>
+      <?php endforeach; ?>
+    </select>
+  </div>
+<?php endif; ?>
+
+  <div class="col-12">
+    <button type="submit" class="btn btn-primary">
+      <i class="fas fa-folder-plus"></i> Create Folder
+    </button>
+  </div>
+</form>
+
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Assign Folder Modal -->
+<div class="modal fade" id="assignFolderModal" tabindex="-1" aria-labelledby="assignFolderModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="assignFolderForm">
+        <div class="modal-header">
+          <h5 class="modal-title" id="assignFolderModalLabel">Assign Folder</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <!-- hidden input -->
+          <input type="hidden" id="documentId" name="document_id">
+
+          <!-- show document title -->
+          <div class="mb-3">
+            <label class="form-label">Document:</label>
+            <p id="assignDocTitle" class="fw-bold"></p>
+          </div>
+
+          <!-- folder selection -->
+          <div class="mb-3">
+            <label for="folderSelect" class="form-label">Select Folder</label>
+            <select class="form-select" id="folderSelect" name="folder_id" required>
+              <option value="">-- Select Folder --</option>
+              <?php foreach ($folders as $folder): ?>
+                <option value="<?= $folder['id'] ?>"><?= htmlspecialchars($folder['folder_name']) ?></option>
+              <?php endforeach; ?>
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Assign</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+
+<!-- Edit Visibility Modal -->
+<div class="modal fade" id="editVisibilityModal" tabindex="-1" aria-labelledby="editVisibilityLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="editVisibilityForm">
+        <div class="modal-header">
+          <h5 class="modal-title" id="editVisibilityLabel">Edit Document Visibility</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" name="doc_id" id="visibility_doc_id">
+          <div class="mb-3">
+            <label for="visibility" class="form-label">Visibility</label>
+            <select class="form-select" id="visibility" name="visibility">
+              <option value="0">Private (Only You)</option>
+              <option value="1">Public (Everyone)</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="submit" class="btn btn-primary">Save Changes</button>
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+
+</div>
+
 <style>
+
 
 .table th {
      border-top: none;
@@ -576,12 +886,25 @@ require_once '../includes/admin_header.php';
     border-color: #28a745 !important;
     background-color: rgba(40, 167, 69, 0.1) !important;
 }
+
+.folder-icon {
+  width: 64px; height: 64px;
+  background-size: cover;
+  background-position: center;
+}
+.folder-item { cursor: pointer; }
+
+#foldersContainer {
+  margin-bottom: 30px; /* adds space below folders */
+}
+
 </style>
 
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    console.log('Admin documents page loaded');
-    
+<script> 
+document.addEventListener('DOMContentLoaded', function () {
+  console.log('Admin documents page loaded');
+
+  // 🔹 Upload elements
     const uploadArea = document.getElementById('uploadArea');
     const fileInput = document.getElementById('fileInput');
     const uploadForm = document.getElementById('uploadForm');
@@ -589,8 +912,232 @@ document.addEventListener('DOMContentLoaded', function() {
     const filePreview = document.getElementById('filePreview');
     const fileList = document.getElementById('fileList');
     const clearBtn = document.getElementById('clearBtn');
-    
-    let selectedFiles = [];
+
+  // 🔹 Document/folder elements
+  const filterForm = document.getElementById("filterForm");
+  const documentsContent = document.getElementById("documentsContent");
+  const foldersContainer = document.getElementById("foldersContainer");
+  const backToFolders = document.getElementById("backToFolders");
+  const documentsContainer = documentsContent?.parentElement; // wrapper if needed
+  const applyFilterBtn = document.getElementById("applyFilterBtn");
+  const clearFilterBtn = document.getElementById("clearFilterBtn");
+
+  let folderPath = []; // stack of folder names
+
+  function fetchDocuments(folderId = null, folderName = null) {
+  const params = new URLSearchParams();
+  if (folderId) params.set('folder_id', folderId);
+
+  documentsContent.innerHTML = `
+    <div class="text-center py-4">
+      <i class="fas fa-spinner fa-spin fa-2x text-muted"></i>
+      <p>Loading documents...</p>
+    </div>`;
+
+  fetch('documents.php?' + params.toString())
+    .then(res => res.text())
+    .then(html => {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+
+      const newDocs = doc.querySelector('#documentsContent');
+      const newFolders = doc.querySelector('#foldersContainer');
+
+      if (newDocs) {
+        documentsContent.innerHTML = newDocs.innerHTML;
+
+        if (folderId) {
+          // Inside a folder → hide folders
+          if (foldersContainer) foldersContainer.style.display = 'none';
+
+          // Show breadcrumb
+          document.getElementById('breadcrumbContainer').style.display = 'block';
+
+          if (folderName) {
+            folderPath.push(folderName);
+          }
+
+          document.getElementById('breadcrumbText').textContent = 'Folders' + (folderPath.length ? ' > ' + folderPath.join(' > ') : '');
+        } else {
+          // Root → show folders + unassigned docs
+          if (foldersContainer && newFolders) {
+            foldersContainer.innerHTML = newFolders.innerHTML;
+            foldersContainer.style.display = 'flex';
+            bindFolderClicks();
+          }
+
+          document.getElementById('breadcrumbContainer').style.display = 'none';
+          folderPath = [];
+        }
+      } else {
+        documentsContent.innerHTML = `<div class="alert alert-warning">No documents found.</div>`;
+      }
+    })
+    .catch(err => {
+      console.error('Fetch error:', err);
+      documentsContent.innerHTML = `<div class="alert alert-danger">Error loading documents</div>`;
+    });
+}
+
+
+function bindFolderClicks() {
+  document.querySelectorAll(".folder-item").forEach(folder => {
+    folder.addEventListener("click", () => {
+      const folderId = folder.dataset.folderId;
+      const folderName = folder.querySelector('h6').textContent; // get folder title
+      fetchDocuments(folderId, folderName);
+    });
+  });
+}
+
+
+
+// Initial bind
+bindFolderClicks();
+
+// Back button
+backToFolders?.addEventListener("click", () => {
+  fetchDocuments(null, true);
+});
+
+
+  // ✅ Folder clicks (delegation)
+  foldersContainer?.addEventListener("click", (e) => {
+    const folder = e.target.closest(".folder-item");
+    if (folder) {
+      fetchDocuments(folder.dataset.folderId);
+    }
+  });
+
+// ✅ Apply filter
+applyFilterBtn?.addEventListener("click", () => {
+  fetchDocuments(null, true);
+  foldersContainer.style.display = "none"; // hide folders
+});
+
+// ✅ Clear filter
+clearFilterBtn?.addEventListener("click", () => {
+  filterForm.reset();
+  fetchDocuments(null, true);
+  foldersContainer.style.display = "block"; // show folders back
+});
+
+
+  // ✅ Back to folders
+  backToFolders?.addEventListener("click", () => {
+  // Pop last folder
+  folderPath.pop();
+  if (folderPath.length === 0) {
+    // Go back to root
+    fetchDocuments(null, null);
+  } else {
+    // Optional: fetch parent folder if you have nested folders
+    // For now, just show root after one level
+    fetchDocuments(null, null);
+  }
+});
+
+});
+ /** -----------------------------
+   * EDIT DOCUMENT VISIBILITY
+   * ----------------------------- */
+  document.addEventListener("DOMContentLoaded", function() {
+    const editButtons = document.querySelectorAll(".edit-visibility-btn");
+    const modal = new bootstrap.Modal(document.getElementById("editVisibilityModal"));
+    const docIdField = document.getElementById("visibility_doc_id");
+    const visibilityField = document.getElementById("visibility");
+
+    editButtons.forEach(btn => {
+        btn.addEventListener("click", function() {
+            const docId = this.dataset.id;
+            const visibility = this.dataset.visibility;
+
+            docIdField.value = docId;
+            visibilityField.value = visibility;
+
+            modal.show();
+        });
+    });
+
+    document.getElementById("editVisibilityForm").addEventListener("submit", function(e) {
+        e.preventDefault();
+        const formData = new FormData(this);
+
+        fetch("documents.php", {
+            method: "POST",
+            body: formData
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                alert(data.message);
+                location.reload();
+            } else {
+                alert("Failed to update: " + data.message);
+            }
+        })
+        .catch(err => {
+            console.error(err);
+            alert("Error connecting to server.");
+        });
+    });
+});
+ /** -----------------------------
+   * ASSIGN FOLDER
+   * ----------------------------- */
+  let currentDocumentId = null;
+
+// Open modal
+function openAssignFolderModal(documentId, documentTitle) {
+    currentDocumentId = documentId;
+    document.getElementById('documentId').value = documentId;
+    document.getElementById('assignDocTitle').textContent = documentTitle;
+
+    const modalEl = document.getElementById('assignFolderModal');
+    const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+    modal.show();
+}
+
+// Handle assign form submit
+document.getElementById('assignFolderForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const formData = new FormData(this);
+
+    fetch('documents.php', {
+        method: 'POST',
+        body: formData
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+            // ✅ Remove the assigned document card from "Unassigned"
+            if (currentDocumentId) {
+                const card = document.querySelector(`[data-document-id="${currentDocumentId}"]`);
+                if (card) card.remove();
+            }
+
+            // ✅ Close modal properly
+            const modalEl = document.getElementById('assignFolderModal');
+            const modal = bootstrap.Modal.getInstance(modalEl);
+            modal.hide();
+
+            // Reset form for next time
+            document.getElementById('assignFolderForm').reset();
+            currentDocumentId = null;
+        } else {
+            alert('Error: ' + data.message);
+        }
+    })
+    .catch(err => {
+        console.error(err);
+        alert('Something went wrong.');
+    });
+});
+
+  /** -----------------------------
+   * UPLOAD HANDLING
+   * ----------------------------- */
+  let selectedFiles = [];
     
     // File input change event
     fileInput.addEventListener('change', function(e) {
@@ -742,7 +1289,7 @@ document.addEventListener('DOMContentLoaded', function() {
         formData.append('visibility', document.getElementById('visibility').value);
         formData.append('tags', document.getElementById('tags').value);
         formData.append('description', document.getElementById('description').value);
-        
+        formData.append('folder_id', document.getElementById('folder_id').value);
         // Show progress
         const progressContainer = document.querySelector('.upload-progress');
         const progressBar = document.getElementById('progressBar');
@@ -861,74 +1408,70 @@ document.addEventListener('DOMContentLoaded', function() {
             return bytes + ' bytes';
         }
     }
-    
-    // Reset form
-    function resetForm() {
-        fileInput.value = '';
-        filePreview.style.display = 'none';
-        uploadBtn.disabled = true;
-        selectedFiles = [];
-        
-        document.getElementById('category').value = '';
-        document.getElementById('visibility').value = '0';
-        document.getElementById('tags').value = '';
-        document.getElementById('description').value = '';
-        
-        const progressContainer = document.querySelector('.upload-progress');
-        progressContainer.style.display = 'none';
-        
-        uploadBtn.innerHTML = '<i class="fas fa-upload me-2"></i>Upload Documents';
-    }
-    
-    window.resetForm = resetForm;
-});
 
-// Delete document function
+// ===============================
+// Form Reset
+// ===============================
+function resetForm() {
+    fileInput.value = '';
+    filePreview.style.display = 'none';
+    uploadBtn.disabled = true;
+    selectedFiles = [];
+
+    document.getElementById('category').value = '';
+    document.getElementById('visibility').value = '0';
+    document.getElementById('tags').value = '';
+    document.getElementById('description').value = '';
+    document.getElementById('folder_id').value = '';
+
+    const progressContainer = document.querySelector('.upload-progress');
+    progressContainer.style.display = 'none';
+
+    uploadBtn.innerHTML = '<i class="fas fa-upload me-2"></i>Upload Documents';
+}
+window.resetForm = resetForm;
+
+// ===============================
+// Delete Document
+// ===============================
 function deleteDocument(id, title) {
-    if (confirm('Are you sure you want to delete "' + title + '"? This action cannot be undone.')) {
-        // Show loading state
-        const btn = event.target.closest('button');
-        const originalContent = btn.innerHTML;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
-        btn.disabled = true;
-        
-        fetch('../api/delete.php', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ id: id })
-        })
-        .then(response => {
-            console.log('Delete response status:', response.status);
-            return response.json();
-        })
-        .then(data => {
-            console.log('Delete response:', data);
-            if (data.success) {
-                showAlert('Document deleted successfully', 'success');
-                // Remove row from table
-                btn.closest('tr').remove();
-                // Update document count
-                updateDocumentCount();
-            } else {
-                showAlert('Error deleting document: ' + data.message, 'danger');
-                // Restore button
-                btn.innerHTML = originalContent;
-                btn.disabled = false;
-            }
-        })
-        .catch(error => {
-            console.error('Delete error:', error);
-            showAlert('Error deleting document', 'danger');
-            // Restore button
+    if (!confirm(`Are you sure you want to delete "${title}"? This action cannot be undone.`)) return;
+
+    const btn = event.target.closest('button');
+    const originalContent = btn.innerHTML;
+
+    // Show loading spinner
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    btn.disabled = true;
+
+    fetch('../api/delete.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showAlert('Document deleted successfully', 'success');
+            btn.closest('tr').remove();
+            updateDocumentCount();
+        } else {
+            showAlert(`Error deleting document: ${data.message}`, 'danger');
             btn.innerHTML = originalContent;
             btn.disabled = false;
-        });
-    }
+        }
+    })
+    .catch(error => {
+        console.error('Delete error:', error);
+        showAlert('Error deleting document', 'danger');
+        btn.innerHTML = originalContent;
+        btn.disabled = false;
+    });
 }
 
-// Show alert function
+// ===============================
+// Alert Function
+// ===============================
 function showAlert(message, type) {
     const alertDiv = document.createElement('div');
     alertDiv.className = `alert alert-${type} alert-dismissible fade show`;
@@ -936,50 +1479,42 @@ function showAlert(message, type) {
         ${message}
         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
     `;
-    
-    // Insert at the top of the container
+
     const container = document.querySelector('.container-fluid');
     container.insertBefore(alertDiv, container.firstChild);
-    
-    // Auto-dismiss after 5 seconds
-    setTimeout(() => {
-        if (alertDiv.parentNode) {
-            alertDiv.remove();
-        }
-    }, 5000);
+
+    setTimeout(() => alertDiv.remove(), 5000);
 }
 
-// Update document count in header
+// ===============================
+// Document Count
+// ===============================
 function updateDocumentCount() {
     const rows = document.querySelectorAll('tbody tr');
     const countElement = document.querySelector('.card-header h6');
     if (countElement) {
-        countElement.innerHTML = countElement.innerHTML.replace(/\(\d+ total\)/, `(${rows.length} total)`);
+        countElement.innerHTML = countElement.innerHTML.replace(
+            /\(\d+ total\)/,
+            `(${rows.length} total)`
+        );
     }
 }
 
-// Initialize tooltips
-document.addEventListener('DOMContentLoaded', function() {
+// ===============================
+// Init Tooltips
+// ===============================
+document.addEventListener('DOMContentLoaded', () => {
     const tooltipTriggerList = [].slice.call(document.querySelectorAll('[title]'));
-    tooltipTriggerList.map(function(tooltipTriggerEl) {
-        return new bootstrap.Tooltip(tooltipTriggerEl);
-    });
+    tooltipTriggerList.forEach(el => new bootstrap.Tooltip(el));
 });
 
-
-
-// Edit Category Functions
+// ===============================
+// Edit Category
+// ===============================
 function editCategory(documentId, currentCategoryId) {
-    console.log('Edit category called:', documentId, currentCategoryId);
-    
-    // Set the document ID
     document.getElementById('editDocumentId').value = documentId;
-    
-    // Set the current category
-    const categorySelect = document.getElementById('editCategorySelect');
-    categorySelect.value = currentCategoryId || '';
-    
-    // Show the modal
+    document.getElementById('editCategorySelect').value = currentCategoryId || '';
+
     const modal = new bootstrap.Modal(document.getElementById('editCategoryModal'));
     modal.show();
 }
@@ -990,21 +1525,16 @@ function updateCategory() {
     const categorySelect = document.getElementById('editCategorySelect');
     const selectedOption = categorySelect.options[categorySelect.selectedIndex];
     const categoryName = selectedOption.text;
-    
-    console.log('Updating category:', documentId, categoryId, categoryName);
-    
-    // Show loading state
+
     const updateBtn = event.target;
     const originalText = updateBtn.innerHTML;
+
     updateBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Updating...';
     updateBtn.disabled = true;
-    
-    // Send update request
+
     fetch('../api/category.php', {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             document_id: parseInt(documentId),
             category_id: categoryId ? parseInt(categoryId) : null
@@ -1012,47 +1542,48 @@ function updateCategory() {
     })
     .then(response => response.json())
     .then(data => {
-        console.log('Update response:', data);
-        
         if (data.success) {
             showAlert('Category updated successfully!', 'success');
-            
-            // Update the category display in the table
-            const rows = document.querySelectorAll('tbody tr');
-            rows.forEach(row => {
-                const downloadBtn = row.querySelector('a[href*="download.php?id=' + documentId + '"]');
+
+            // Update in TABLE
+            document.querySelectorAll('tbody tr').forEach(row => {
+                const downloadBtn = row.querySelector(`a[href*="download.php?id=${documentId}"]`);
                 if (downloadBtn) {
-                    const categoryCell = row.children[2]; // Category is the 3rd column (index 2)
+                    const categoryCell = row.children[2];
                     if (categoryCell) {
-                        if (data.category_name) {
-                            categoryCell.innerHTML = `<span class="badge bg-info">${data.category_name}</span>`;
-                        } else {
-                            categoryCell.innerHTML = `<span class="text-muted">Uncategorized</span>`;
-                        }
-                    }
-                    
-                    // Update the edit button's onclick to reflect new category ID
-                    const editBtn = row.querySelector('button[title="Edit Category"]');
-                    if (editBtn) {
-                        editBtn.setAttribute('onclick', `editCategory(${documentId}, ${categoryId || 'null'})`);
+                        categoryCell.innerHTML = data.category_name
+                            ? `<span class="badge bg-info">${data.category_name}</span>`
+                            : `<span class="text-muted">Uncategorized</span>`;
                     }
                 }
             });
-            
+
+            // Update in CARD
+            const card = document.querySelector(`button[onclick*="editCategory(${documentId}"]`)?.closest('.card');
+            if (card) {
+                const badgeContainer = card.querySelector('.card-body small.mb-1');
+                if (badgeContainer) {
+                    badgeContainer.innerHTML = data.category_name
+                        ? `<span class="badge bg-info">${data.category_name}</span>`
+                        : `<span class="text-muted">Uncategorized</span>`;
+                }
+                const editBtn = card.querySelector('button[title="Edit Category"]');
+                if (editBtn) {
+                    editBtn.setAttribute('onclick', `editCategory(${documentId}, ${categoryId || 'null'})`);
+                }
+            }
+
             // Close modal
-            const modal = bootstrap.Modal.getInstance(document.getElementById('editCategoryModal'));
-            modal.hide();
-            
+            bootstrap.Modal.getInstance(document.getElementById('editCategoryModal')).hide();
         } else {
-            showAlert('Error updating category: ' + (data.message || 'Unknown error'), 'danger');
+            showAlert(`Error updating category: ${data.message || 'Unknown error'}`, 'danger');
         }
     })
     .catch(error => {
         console.error('Error:', error);
-        showAlert('Error updating category: ' + error.message, 'danger');
+        showAlert(`Error updating category: ${error.message}`, 'danger');
     })
     .finally(() => {
-        // Reset button
         updateBtn.innerHTML = originalText;
         updateBtn.disabled = false;
     });

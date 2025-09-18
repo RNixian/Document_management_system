@@ -1,0 +1,23 @@
+SUPERADMIN
+problem
+1. Superadmin can’t view the files uploaded within division (empty folder)
+
+
+ADMIN
+1. Admin must have the ability to add new folder within division and visible to user.
+
+-for example admin created CCTV FILE folder, the user must view this folder to post a file inside that folder
+
+if possible magpost ng file within admin within division and then may dropdown kung sino pwede mag View and Edit. wdyt?
+
+
+USER
+problem
+1. user cant view the posted file of admin
+
+
+FEATURE ADDED (you can do these next week if you want, not urgent)
+• add “publisher”  in file type
+•must upload multiple file
+•Admin must have the ability to add a user that can be Editor, or can download the file. 
+Other user can view only the file uploaded by the admin except for the user that has given the ability to edit and download file

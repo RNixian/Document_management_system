@@ -208,16 +208,16 @@ require_once '../includes/admin_header.php';
                                 <?= htmlspecialchars($doc['title']) ?><br>
                                 <small class="text-muted"><?= htmlspecialchars($doc['original_name']) ?></small>
                             </div>
-                            <div class="mb-2"><strong>Owner:</strong><br>
+                            <div class="mb-2"><strong>Owner: </strong>
                                 <?= htmlspecialchars($doc['full_name'] ?? $doc['username']) ?>
                             </div>
-                            <div class="mb-2"><strong>Department:</strong><br>
+                            <div class="mb-2"><strong>Department: </strong>
                                 <?= htmlspecialchars($doc['division_name']) ?>
                             </div>
-                            <div class="mb-2"><strong>Size:</strong><br>
+                            <div class="mb-2"><strong>Size: </strong>
                                 <?= formatFileSize($doc['file_size']) ?>
                             </div>
-                            <div class="mb-2"><strong>Uploaded:</strong><br>
+                            <div class="mb-2"><strong>Uploaded: </strong>
                                 <?= date('M j, Y g:i A', strtotime($doc['created_at'])) ?>
                             </div>
                             <div class="mt-3 d-flex flex-wrap gap-2">

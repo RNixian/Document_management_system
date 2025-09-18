@@ -525,26 +525,39 @@ require_once '../includes/superadmin_header.php';
                                             <td><?php echo htmlspecialchars($user['email']); ?></td>
                                                 
                                             <td>
-                                                <span class="badge bg-<?php echo $user['role'] === 'admin' ? 'danger' : 'primary'; ?>">
-                                                    <i class="fas fa-<?php echo $user['role'] === 'admin' ? 'user-shield' : 'user'; ?> me-1"></i>
-                                                    <?php echo ucfirst($user['role']); ?>
-                                                </span>
+                                                <?php if ($user['role'] === 'superadmin'): ?>
+                                                    <span class="badge bg-danger">
+                                                        <i class="fas fa-crown me-1"></i> Superadmin
+                                                    </span>
+                                                <?php elseif ($user['role'] === 'admin'): ?>
+                                                    <span class="badge bg-warning text-dark">
+                                                        <i class="fas fa-user-shield me-1"></i> Admin
+                                                    </span>
+                                                <?php else: ?>
+                                                    <span class="badge bg-primary">
+                                                        <i class="fas fa-user me-1"></i> <?php echo ucfirst($user['role']); ?>
+                                                    </span>
+                                                <?php endif; ?>
                                             </td>
                                              <!-- Division Column -->
                                              <td>
-                                            <?php if (!empty($user_divisions[$user['id']])): ?>
-                                                <?php foreach ($user_divisions[$user['id']] as $div): ?>
-                                                    <span class="badge bg-primary text-white me-1">
-                                                        <i class="fas fa-building me-1"></i>
-                                                        <?php echo htmlspecialchars($div['division_name']); ?>
+                                                <?php if ($user['role'] === 'superadmin'): ?>
+                                                    <span class="badge bg-danger text-white">
+                                                        <i class="fas fa-crown me-1"></i> Superadmin
                                                     </span>
-                                                <?php endforeach; ?>
-                                            <?php else: ?>
-                                                <span class="badge bg-secondary">
-                                                    <i class="fas fa-question me-1"></i>No Division
-                                                </span>
-                                            <?php endif; ?>
-                                        </td>
+                                                <?php elseif (!empty($user_divisions[$user['id']])): ?>
+                                                    <?php foreach ($user_divisions[$user['id']] as $div): ?>
+                                                        <span class="badge bg-primary text-white me-1">
+                                                            <i class="fas fa-building me-1"></i>
+                                                            <?php echo htmlspecialchars($div['division_name']); ?>
+                                                        </span>
+                                                    <?php endforeach; ?>
+                                                <?php else: ?>
+                                                    <span class="badge bg-secondary">
+                                                        <i class="fas fa-question me-1"></i>No Division
+                                                    </span>
+                                                <?php endif; ?>
+                                            </td>
                                             <td>
                                                 <span class="badge bg-<?php echo $user['status'] === 'active' ? 'success' : 'secondary'; ?>">
                                                     <i class="fas fa-<?php echo $user['status'] === 'active' ? 'check-circle' : 'times-circle'; ?> me-1"></i>

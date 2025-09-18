@@ -121,6 +121,11 @@ if (!defined('ADMIN_AREA')) {
                     </a>
                 </li>
                 <li class="nav-item">
+                    <a class="nav-link" href="department.php">
+                        <i class="fas fa-file-alt me-1"></i>Department Documents
+                    </a>
+                </li>
+                <li class="nav-item">
                     <a class="nav-link" href="categories.php">
                         <i class="fas fa-tags me-1"></i>Categories
                     </a>

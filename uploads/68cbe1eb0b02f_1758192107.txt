@@ -1,0 +1,16 @@
+
+table inventory
+
+
+chat with a real person open to all:
+Spam risk: Bots and malicious users can flood the system.
+
+Harder to manage: You may not know who is sending the message unless you ask for name/email manually.
+
+No integration: Cannot link inquiries to accounts or order history.
+
+
+
+
+
+admin image chat

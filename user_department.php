@@ -1,5 +1,5 @@
 <?php
-$page_title = 'My Department Documents';
+$page_title = 'My Documents';
 require_once 'includes/functions.php';
 requireLogin();
 
@@ -16,10 +16,27 @@ try {
     $division_name = 'Unknown';
 }
 
+$user_id = $_SESSION['user_id'] ?? 0; // logged-in user ID
+$user_divisions = [];
+
+if ($user_id > 0) {
+    $stmt = $db->prepare("
+        SELECT d.id, d.name
+        FROM user_divisions ud
+        INNER JOIN division d ON ud.division_id = d.id
+        WHERE ud.user_id = ?
+    ");
+    if ($stmt) {
+        $stmt->execute([$user_id]);
+        $user_divisions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } else {
+        die("Query preparation failed.");
+    }
+}
+
 // Search/filter
 $search = trim($_GET['search'] ?? '');
 
-// Query department documents
 $where = "
     WHERE (
         d.user_id = ? 
@@ -48,8 +65,10 @@ $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $documents = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+
 require_once 'includes/header.php';
 ?>
+
 
 <style>
 .dashboard-welcome {
@@ -185,7 +204,7 @@ require_once 'includes/header.php';
                                     <b><?php echo htmlspecialchars($doc['title']); ?></b><br>
                                     <small class="text-muted"><?php echo htmlspecialchars($doc['original_name']); ?></small>
                                 </td>
-                                <td><?php echo htmlspecialchars($doc['full_name'] ?? $doc['username']); ?></td>
+                                <td><?php echo htmlspecialchars($doc['fullname'] ?? $doc['username']); ?></td>
                                 <td><?php echo formatFileSize($doc['file_size']); ?></td>
                                 <td><?php echo date('M j, Y g:i A', strtotime($doc['created_at'])); ?></td>
                                 <td>
@@ -210,7 +229,7 @@ require_once 'includes/header.php';
         <div class="modal-content">
             <form id="deptUploadForm" enctype="multipart/form-data">
                 <div class="modal-header">
-                    <h5 class="modal-title"><i class="fas fa-upload me-2"></i>Upload Department File</h5>
+                    <h5 class="modal-title"><i class="fas fa-upload me-2"></i>Upload Document</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
@@ -238,6 +257,24 @@ require_once 'includes/header.php';
                             <option value="1">Public (All Departments)</option>
                         </select>
                     </div>
+                    <div class="mb-3">
+    <label class="form-label">Select Division to Upload</label>
+    <div>
+        <?php if (!empty($user_divisions)): ?>
+            <?php foreach ($user_divisions as $division): ?>
+                <button type="button" 
+                        class="btn btn-outline-primary btn-sm me-2 mb-2 division-btn" 
+                        data-division-id="<?php echo $division['id']; ?>">
+                    <?php echo htmlspecialchars($division['name']); ?>
+                </button>
+            <?php endforeach; ?>
+            <input type="hidden" name="division_id" id="divisionInput">
+        <?php else: ?>
+            <p class="text-muted">No divisions assigned.</p>
+        <?php endif; ?>
+    </div>
+</div>
+
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -279,6 +316,19 @@ function deleteDepartmentDoc(id, btn) {
         else btn.disabled = false;
     });
 }
+
+document.addEventListener("DOMContentLoaded", function () {
+    const divisionInput = document.getElementById("divisionInput");
+    const buttons = document.querySelectorAll(".division-btn");
+
+    buttons.forEach(btn => {
+        btn.addEventListener("click", function () {
+            buttons.forEach(b => b.classList.remove("active")); // remove active from others
+            this.classList.add("active");
+            divisionInput.value = this.getAttribute("data-division-id");
+        });
+    });
+});
 </script>
 
 <?php require_once 'includes/footer.php'; ?>
