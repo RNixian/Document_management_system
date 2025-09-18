@@ -1,21 +1,23 @@
 <?php
 $page_title = 'Admin Dashboard';
-// Include functions (which includes database)
-require_once '../includes/functions.php';
+
+// Always load functions.php
+require_once __DIR__ . '/../includes/functions.php';
 requireLogin();
 requireAdmin();
 
 // Make sure $db is available globally
 global $db;
 
-require_once '../includes/admin_header.php';
+// Load admin header
+require_once __DIR__ . '/../includes/admin_header.php';
 ?>
 
 <style>
 /* Background */
 body {
     font-family: 'Segoe UI', sans-serif;
-    background:  rgba(47, 52, 77, 0.92);
+    background: rgba(47, 52, 77, 0.92);
     background-size: 400% 400%;
     animation: gradientMove 18s ease infinite;
     min-height: 100vh;
@@ -178,12 +180,11 @@ body {
             <div class="col-md-3 mb-3">
                 <a href="categories.php" class="btn-modern"><i class="fas fa-tags me-2"></i>Categories</a>
             </div>
-            
         </div>
     </div>
 
-    <!-- Recent Users -->
     <div class="row mb-4">
+        <!-- Recent Users -->
         <div class="col-lg-6">
             <div class="glass-card">
                 <h5><i class="fas fa-clock me-2"></i>Recent Users</h5>
@@ -266,6 +267,48 @@ body {
             </div>
         </div>
     </div>
+
+    <!-- Shared With Me -->
+    <div class="glass-card mb-4">
+        <h5><i class="fas fa-share-alt me-2"></i>Shared With Me</h5>
+        <?php
+        try {
+            $stmt = $db->prepare("
+                SELECT d.title, d.file_size, sd.shared_at, u.username AS shared_by
+                FROM shared_documents sd
+                JOIN documents d ON sd.document_id = d.id
+                JOIN users u ON sd.shared_by = u.id
+                WHERE sd.shared_to = ?
+                ORDER BY sd.shared_at DESC
+            ");
+            $stmt->execute([$_SESSION['user_id']]);
+            $sharedDocs = $stmt->fetchAll();
+            if ($sharedDocs): ?>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle">
+                        <thead>
+                            <tr><th>Document</th><th>Shared By</th><th>Size</th><th>Shared At</th><th>Action</th></tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($sharedDocs as $doc): ?>
+                            <tr>
+                                <td><?php echo htmlspecialchars($doc['title']); ?></td>
+                                <td><?php echo htmlspecialchars($doc['shared_by']); ?></td>
+                                <td><?php echo formatFileSize($doc['file_size']); ?></td>
+                                <td><?php echo timeAgo($doc['shared_at']); ?></td>
+                                <td><a href="../view.php?id=<?php echo urlencode($doc['document_id']); ?>" class="btn btn-sm btn-primary">View</a></td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            <?php else: ?>
+                <p class="text-muted">No documents shared with you.</p>
+            <?php endif;
+        } catch (PDOException $e) {
+            echo '<div class="alert alert-danger">Error loading shared documents.</div>';
+        } ?>
+    </div>
 </div>
 
 <?php
@@ -280,4 +323,5 @@ if (!function_exists('formatFileSize')) {
 }
 ?>
 
-<?php include '../includes/footer.php'; ?>
+<?php include __DIR__ . '/../includes/footer.php'; ?>
+    
